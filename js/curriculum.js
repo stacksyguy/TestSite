@@ -437,3 +437,6 @@ export const SEQUENCE = S8_ON ? S8.SEQUENCE : SEQUENCE9;
 export const UNITS = S8_ON ? S8.UNITS : UNITS9;
 export const OBJECTIVES = S8_ON ? S8.OBJECTIVES : OBJECTIVES9;
 export const GRAMMAR = S8_ON ? S8.GRAMMAR : GRAMMAR9;
+// Both stages' maps, for the teacher page (which shows classes of either stage).
+export const SEQUENCE_BY_STAGE = { 9: SEQUENCE9, 8: S8.SEQUENCE };
+export const UNITS_BY_STAGE = { 9: UNITS9, 8: S8.UNITS };

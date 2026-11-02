@@ -32,6 +32,7 @@ import * as X2 from "./crossword.js";
 import * as AR from "./arcade.js";
 import * as PA from "./papers.js";
 import { STAGE, STAGES, useStage } from "./stage.js";
+import * as UL from "./unlock.js";
 
 const $app = document.getElementById("app");
 L.applyLook();                 // the device's look, also on the sign-in page
@@ -141,6 +142,7 @@ function loginView(msg) {
 /* ---------------- loading ---------------- */
 async function refresh() {
   [me, history] = await Promise.all([api.me(session.token), api.history(session.token)]);
+  UL.setUnlock(me.unlock);     // the units the class's teacher has opened
 }
 // Any error while drawing a page shows a message with a way out, instead of leaving the page stuck on "Loading…".
 async function route() {
@@ -192,7 +194,7 @@ async function draw() {
   if (view.startsWith("quest-") && Q.questOf(view.slice(6))) return qQuestView(view.slice(6));
   if (view.startsWith("lesson-") && GE.GBLOCKS[view.slice(7)]) return gbLessonView(view.slice(7));
   const rv = /^rlab(?:-(\d))?$/.exec(view);
-  if (rv && RL.RLAB_UNITS.length) return rlabHubView(rv[1] ? +rv[1] : rlUnitNow());
+  if (rv && rlUnits().length) return rlabHubView(rv[1] ? +rv[1] : rlUnitNow());
   const m = /^unit-(\d)(?:\/(\w+))?$/.exec(view);
   if (m) return unitView(+m[1], m[2]);
   return homeView();
@@ -290,7 +292,7 @@ function quickTiles(due) {
   const t = (href, ic, title, note) => `<a class="qtile" href="${href}">${I.tile(ic, "m")}<b>${title}</b><span class="note">${note}</span></a>`;
   return `<div class="qtiles">${t(`#unit-${fu}`, I.unitIcon(fu), `Unit ${fu}`, `Mission ${m.steps.filter(x => x.done).length} of ${m.steps.length}`)}
     ${t("#review", "review", "Review", due ? `${due} word${due > 1 ? "s" : ""} due` : "Nothing due")}
-    ${RL.RLAB_UNITS.length ? t(`#rlab-${RL.RLAB_UNITS.includes(fu) ? fu : rlUnitNow()}`, "lab", "Reading Lab", "Beat the reading tricks") : ""}
+    ${rlUnits().length ? t(`#rlab-${rlUnits().includes(fu) ? fu : rlUnitNow()}`, "lab", "Reading Lab", "Beat the reading tricks") : ""}
     ${t("#grammar", "grammar", "Grammar", "Builder, Quests and Lab")}
     ${t("#games", "games", "Games", best ? `Best ${best} points` : "Play and practise")}
     ${t("#me", "stats", "My stats", sc == null ? "Score: not yet" : `Score ${sc}`)}</div>`;
@@ -304,7 +306,8 @@ function readTestCard() {
   const when = left <= 0 ? "today" : left === 1 ? "tomorrow" : `in ${left} days`, wd = day.toLocaleDateString("en-GB", { weekday: "long" });
   const done = new Set(history.map(h => h.text_id));
   // Each unit shows three tappable rings (Reading Lab, Texts, Words); a full ring earns a star.
-  const parts = READ_TEST.units.flatMap(u => {
+  const tu = READ_TEST.units.filter(u => UL.unitOpen(u)); if (!tu.length) return "";
+  const parts = tu.flatMap(u => {
     const texts = PRACTICE_TEXTS.filter(t => t.unitNo === u), vm = P.vocabMastery(u, history);
     const lab = RL.RLAB.filter(m => history.some(h => h.text_id === m.id && (h.answers || []).some(a => RL.rItemUnit(a.rlab) === u))).length;
     return [{ u, key: "lab", ic: "🔎", name: "Lab", long: "Reading Lab", href: `#rlab-${u}`, n: lab, of: RL.RLAB.length },
@@ -313,20 +316,20 @@ function readTestCard() {
   const frac = x => Math.min(1, x.n / x.of);
   const ring = x => `<a class="rtring${frac(x) >= 1 ? " full" : ""}" href="${x.href}" style="--p:${Math.round(100 * frac(x))}%" aria-label="Unit ${x.u} ${x.long}: ${x.n} of ${x.of}">
       <span class="rtdial"><span>${x.ic}</span></span><span class="rtlbl">${x.name}<br>${x.n}/${x.of}</span></a>`;
-  const units = READ_TEST.units.map(u => { const ps = parts.filter(x => x.u === u), stars = ps.filter(x => frac(x) >= 1).length;
+  const units = tu.map(u => { const ps = parts.filter(x => x.u === u), stars = ps.filter(x => frac(x) >= 1).length;
     return `<div class="rtunit"><b>Unit ${u}</b><span class="rtname">${U.esc(UNITS[u].title)}</span><div class="rtrings">${ps.map(ring).join("")}</div>
       <div class="rtstars" aria-label="${stars} of ${ps.length} stars">${ps.map((_, i) => `<span${i < stars ? "" : ' class="off"'}>★</span>`).join("")}</div></div>`; }).join("");
   const next = parts.filter(x => frac(x) < 1).sort((a, b) => frac(a) - frac(b))[0];
   const go = next ? `<a class="rtgo" href="${next.href}">▶ Practise now<small>Unit ${next.u} · ${next.long} ${next.n}/${next.of}</small></a>`
     : `<div class="rtgo done">★ All rings full. Well done!<small>Keep practising in the Reading Lab before ${wd}.</small></div>`;
   return `<div class="rtcard"><div class="rttop"><div><span class="rteb">📖 Reading test</span><h3>${wd}'s reading test</h3>
-      <p>Units ${READ_TEST.units.join(" and ")}. Tap a ring to practise. Fill every ring to get all the stars.</p></div>
+      <p>Unit${tu.length > 1 ? "s" : ""} ${tu.join(" and ")}. Tap a ring to practise. Fill every ring to get all the stars.</p></div>
       <div class="rtdays"><b>${left <= 0 ? "!" : left}</b><small>${left <= 0 ? "TODAY" : left === 1 ? "DAY" : "DAYS"}</small></div></div>
     <div class="rtunits">${units}</div>${go}</div>`;
 }
 
 /* ---------------- units ---------------- */
-const STATUS = { done: ["Done", "none"], now: ["Now", "hint"], upcoming: ["Coming up", "rescue"] };
+const STATUS = { done: ["Done", "none"], now: ["Now", "hint"], upcoming: ["Coming up", "rescue"], locked: ["Locked", "locked"] };
 // A unit page has one tab per section; units without reading texts or listening leave those tabs out.
 function unitSections(u) {
   const texts = PRACTICE_TEXTS.filter(t => t.unitNo === u);
@@ -335,7 +338,7 @@ function unitSections(u) {
   const lists = VOCAB[u].map((l, i) => `List ${i + 1}: ${l.length} words`).join(" · ");
   const secs = [{ key: "mission", label: "Mission", html: missionHTML(u) }];
   if (texts.length) secs.push({ key: "read", label: "Reading", html: `<div class="usec">${me.baseline_done ? "" : `<p class="note">Take the baseline on the Home page first. It sets your reading level.</p>`}
-      <div class="tiles">${RL.RLAB_UNITS.includes(u) ? aTile("lab", `data-rlabhub="${u}"`, "Reading Lab", "Beat the tricks in Checkpoint reading: 8 short missions") : ""}${texts.map(t => aTile("read", `data-text="${t.id}" ${me.baseline_done ? "" : "disabled"}`, t.topic, done.has(t.id) ? "Done before: half XP this time" : t.blurb, done.has(t.id))).join("")}</div>
+      <div class="tiles">${rlUnits().includes(u) ? aTile("lab", `data-rlabhub="${u}"`, "Reading Lab", "Beat the tricks in Checkpoint reading: 8 short missions") : ""}${texts.map(t => aTile("read", `data-text="${t.id}" ${me.baseline_done ? "" : "disabled"}`, t.topic, done.has(t.id) ? "Done before: half XP this time" : t.blurb, done.has(t.id))).join("")}</div>
       </div>` });
   if (listeningFor(u).length) secs.push({ key: "listen", label: "Listening", html: `<div class="usec"><div class="tiles">${aTile("lab", "data-labhub", "Listening Lab", "Learn the examiner's tricks: 6 short missions")}${gameTile("dodge", u)}${listeningFor(u).map(t =>
       aTile("listen", `data-listen="${t.id}"`, t.topic, `${t.part} · ${done.has(t.id) ? "Done before" : t.blurb}`, done.has(t.id))).join("")}</div></div>` });
@@ -426,14 +429,24 @@ function pathHTML(fu) {
     const isNow = e === cur;
     if (e.kind !== "unit") return `<div class="pstep minor${isNow ? " now" : ""}"><span class="dot"></span><div><b>${U.esc(e.title)}</b> <span class="note">${e.weeks}</span></div></div>`;
     const vm = P.vocabMastery(e.unit, history), st = P.unitStatus(e.unit);
+    if (st === "locked") return `<a class="pstep locked" href="#unit-${e.unit}"><span class="dot">${I.icon("lock", 16)}</span><div><b>Unit ${e.unit}: ${U.esc(UNITS[e.unit].title)}</b> <span class="note">${e.weeks}</span>
+      <br><span class="note">Locked. ${U.esc(UL.lockNote(e.unit))}</span></div></a>`;
     return `<a class="pstep ${st}${e.unit === fu ? " focus" : ""}" href="#unit-${e.unit}"><span class="dot">${I.icon(I.unitIcon(e.unit), 18)}</span><div><b>Unit ${e.unit}: ${U.esc(UNITS[e.unit].title)}</b> <span class="note">${e.weeks}${isNow ? " · now" : ""}</span>
       <br><span class="note">${vm.mastered}/${vm.total} words · ${P.unitGrammar(e.unit).length} grammar points</span></div></a>`;
   }).join("")}</div>`;
 }
 function unitView(u, tab) {
   if (!UNITS[u]) return homeView();
+  if (!UL.unitOpen(u)) return lockedView(u);
   $app.innerHTML = `<div class="narrow pop"><div class="row"><a href="#units">← All units</a></div>${unitCard(u, tab || lastTab[u])}</div>`;
   bindActivities();
+}
+// A unit the teacher hasn't opened: its name and a way back, and nothing to start.
+function lockedView(u) {
+  $app.innerHTML = `<div class="narrow pop"><div class="row"><a href="#units">← All units</a></div>
+    <div class="tcard unit locked"><div class="row uhead">${I.tile("lock", "m")}<h3>${U.esc(P.unitTitle(u))}</h3><span class="chip locked">Locked</span></div>
+      <p>${U.esc(UL.lockNote(u))}</p><p class="note">Until then, keep practising the units that are open.</p>
+      <div class="row"><a class="btn" href="#unit-${P.focusUnit()}">Go to Unit ${P.focusUnit()}</a></div></div></div>`;
 }
 function unitsView() {
   const fu = P.focusUnit();
@@ -452,10 +465,10 @@ function reviewView() {
   bindActivities();
 }
 function gamesView() {
-  const fu = P.focusUnit(), u = UNITS[gamesUnit] ? gamesUnit : fu;
+  const fu = P.focusUnit(), u = UNITS[gamesUnit] && UL.unitOpen(gamesUnit) ? gamesUnit : fu;
   $app.innerHTML = `<div class="narrow pop"><div class="hero"><p class="eyebrow">Games</p><h1>Play and practise</h1>
     <p class="lede">Games use the words and texts from the unit you choose, and Trap Dodger uses the Listening Lab clips. You can earn up to ${G.GAME_XP_DAY} XP a day from games.</p></div>
-    <div class="tabs" role="tablist" aria-label="Unit">${SEQUENCE.filter(e => e.kind === "unit").map(e => `<button role="tab" aria-selected="${e.unit === u}" data-gu="${e.unit}">Unit ${e.unit}</button>`).join("")}</div>
+    <div class="tabs" role="tablist" aria-label="Unit">${SEQUENCE.filter(e => e.kind === "unit" && UL.unitOpen(e.unit)).map(e => `<button role="tab" aria-selected="${e.unit === u}" data-gu="${e.unit}">Unit ${e.unit}</button>`).join("")}</div>
     <h2>${U.esc(P.unitTitle(u))}</h2>${gamesHTML(u, true)}</div>`;
   $app.querySelectorAll("[data-gu]").forEach(b => b.onclick = () => { gamesUnit = +b.dataset.gu; S.play("tap"); gamesView(); });
   bindActivities();
@@ -1584,10 +1597,12 @@ function labDoneView() {
 // Each unit has its own questions (it.u): Unit 2 Well-being, Unit 3 Tourism. The trap tracker and the start level are shared.
 const RL_TOPIC = u => UNITS[u].title;
 let rlLastUnit = null;
-const rlUnitNow = () => rlLastUnit || (RL.RLAB_UNITS.includes(P.focusUnit()) ? P.focusUnit() : RL.RLAB_UNITS[0]);
+// Reading Lab units the student can open (a unit the teacher hasn't opened is left out).
+const rlUnits = () => RL.RLAB_UNITS.filter(u => UL.unitOpen(u));
+const rlUnitNow = () => { const us = rlUnits(); return us.includes(rlLastUnit) ? rlLastUnit : us.includes(P.focusUnit()) ? P.focusUnit() : us[us.length - 1]; };
 const rlRunUnit = () => run.unit || RL.rItemUnit(run.seq[0]) || RL.RLAB_UNITS[0];
 function rlabHubView(u) {
-  if (!RL.RLAB_UNITS.includes(u)) u = rlUnitNow();
+  if (!rlUnits().includes(u)) u = rlUnitNow();
   rlLastUnit = u;
   const att = id => history.filter(h => h.text_id === id && (h.answers || []).some(a => a.skill === "Reading Lab" && RL.rItemUnit(a.rlab) === u));
   const best = id => { const s = att(id).map(h => h.score); return s.length ? Math.max(...s) : null; };
@@ -1596,10 +1611,10 @@ function rlabHubView(u) {
   $app.innerHTML = `<div class="narrow pop"><div class="hero"><p class="eyebrow">Reading · Unit ${u}: ${RL_TOPIC(u)}</p><h1>Reading Lab</h1>
       <p class="lede">Learn the tricks in Checkpoint reading questions, and how to beat them. Eight short missions, one for each kind of question, with texts on ${RL_TOPIC(u).toLowerCase()}.</p>
       <p class="note">The questions change with you. Get 2 right first time in a row and you move up: Core, Stretch, then Challenge. You start your next mission on ${lvChip(start)}.</p></div>
-    <div class="tabs" role="tablist" aria-label="Unit">${RL.RLAB_UNITS.map(x => `<button role="tab" aria-selected="${x === u}" data-rlu="${x}">Unit ${x}: ${RL_TOPIC(x)}</button>`).join("")}</div>
+    <div class="tabs" role="tablist" aria-label="Unit">${rlUnits().map(x => `<button role="tab" aria-selected="${x === u}" data-rlu="${x}">Unit ${x}: ${RL_TOPIC(x)}</button>`).join("")}</div>
     <div class="tiles">${RL.RLAB.map(m => { const b = best(m.id);
       return aTile("lab", `data-rlab="${m.id}" data-ru="${u}"`, `${m.n}. ${m.title}`, b != null ? `Best: ${b} of ${Lab.MISSION_LEN} · reached ${labLevel(peak(m.id))}` : `${m.part} · ${m.blurb}`, b != null); }).join("")}</div>
-    <div class="panel"><h3>Your reading trap tracker</h3><p class="note">For both units.</p>${U.rTrapsHTML(history)}</div></div>`;
+    <div class="panel"><h3>Your reading trap tracker</h3><p class="note">For all your Reading Lab units.</p>${U.rTrapsHTML(history)}</div></div>`;
   bindActivities();
   $app.querySelectorAll("[data-rlu]").forEach(b => b.onclick = () => { location.hash = `#rlab-${b.dataset.rlu}`; });
 }
@@ -1748,6 +1763,7 @@ function glabHubView() {
       <p class="lede">Grammar missions where you work out the rule yourself, then use it to solve something.</p></div>
     <ol class="glsteps">${GL_STEPS.map(([h, p]) => `<li><b>${h}</b><span class="note">${p}</span></li>`).join("")}</ol>
     <div class="tiles">${GL.GLAB.map(m => { const a = att(m.id), best = a.length ? Math.max(...a.map(h => h.score)) : null;
+      if (!UL.unitOpen(m.unit)) return aTile("lock", "disabled", `${m.n}. ${m.title}`, `Unit ${m.unit} · opens when your teacher opens Unit ${m.unit}`);
       return aTile("grammar", `data-glab="${m.id}"`, `${m.n}. ${m.title}`, best != null ? `${m.point} ${m.short} · best ${best} of ${GL.GLAB_LEN} · reached ${labLevel(Math.max(...a.map(h => GL.glabPeak(h.answers || []))))}`
         : `Unit ${m.unit} · ${m.point} ${m.short}. ${m.blurb}`, best != null); }).join("")}</div>
     <p class="note">Prove it starts on ${lvChip(start)}. Get 2 right first time in a row to move up.</p></div>`;
@@ -2098,7 +2114,7 @@ function finishGLab() {
   first ? Cel.big({ icon: "🔎", title: `Mission complete, ${firstName()}!`, sub: m.title, xp: run.result.xp }) : Cel.set(run.result.xp);
 }
 function glDoneView() {
-  const m = glM(), R = run.result, main = run.results.filter(r => r.skill === "Grammar"), next = GL.GLAB.find(x => x.n === m.n + 1);
+  const m = glM(), R = run.result, main = run.results.filter(r => r.skill === "Grammar"), next = GL.GLAB.find(x => x.n === m.n + 1 && UL.unitOpen(x.unit));
   const caught = main.filter(r => !r.first_try).map(r => m.prove.find(x => x.id === r.glab)).filter(Boolean);
   $app.innerHTML = `<div class="narrow pop"><p class="eyebrow">Grammar Lab · Mission ${m.n} done</p><h1>${R.score} of ${main.length} right first time</h1>
     <div class="stats"><div class="stat gold"><b>+${R.xp}</b><span>XP earned</span></div><div class="stat"><b>${R.score}/${main.length}</b><span>Prove it, first time</span></div>
