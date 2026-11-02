@@ -47,6 +47,7 @@ const live = {
   newPins: (t, c) => rpc("ck_teacher_new_pins", { p_token: t, p_class: c }),
   englishNames: (t, c, list) => rpc("ck_teacher_english_names", { p_token: t, p_class: c, p_names: list }),
   setStage: (t, c, stage) => rpc("ck_teacher_set_stage", { p_token: t, p_class: c, p_stage: stage }),
+  setUnits: (t, c, mode, units) => rpc("ck_teacher_set_units", { p_token: t, p_class: c, p_mode: mode, p_units: units }),
   removeStudent: (t, id) => rpc("ck_teacher_remove_student", { p_token: t, p_student: id }),
   deleteClass: (t, c) => rpc("ck_teacher_delete_class", { p_token: t, p_class: c }),
   setPassword: (t, o, n) => rpc("ck_set_password", { p_token: t, p_old: o, p_new: n }),
@@ -122,6 +123,9 @@ function addStage8(db) {
   db.students.push({ id: "s8demo", username: "demo8", display_name: "Demo Linh", role: "student", pin: "1234", class_code: "DEMO8", level: null, xp_total: 0 });
 }
 const stageOf = (db, code) => (db.classes.find(c => c.code === code) || {}).stage || 9;
+// A class's unit unlocking, as the database keeps it: manual with Units 1-3 open unless the teacher changed it.
+const unlockOf = (db, code) => { const c = db.classes.find(x => x.code === code);
+  return c ? { mode: c.unlock_mode || "manual", units: c.open_units || [1, 2, 3] } : null; };
 function load() {
   try { const d = JSON.parse(localStorage.getItem(KEY));
     if (d && d.students) { if (!d.classes) { const t = d.students.find(x => x.username === "teacher"); if (t) t.is_admin = true; d.classes = [{ code: "DEMO", teacher_id: t && t.id }]; } addStage8(d); return d; } } catch (e) {}
@@ -155,7 +159,7 @@ const demo = {
   async me(t) {
     const db = load(), s = auth(db, t);
     return later({ id: s.id, name: s.english_name || s.display_name, english_name: s.english_name || null, username: s.username, class_code: s.class_code, role: s.role, level: s.level,
-      is_admin: !!s.is_admin, must_change: !!s.must_change, stage: stageOf(db, s.class_code),
+      is_admin: !!s.is_admin, must_change: !!s.must_change, stage: stageOf(db, s.class_code), unlock: unlockOf(db, s.class_code),
       xp_total: s.xp_total, xp_week: xpSince(db, s.id, weekStart()), baseline_done: db.attempts.some(a => a.student_id === s.id && a.mode === "baseline") });
   },
   async history(t) { const db = load(), s = auth(db, t); return later(hist(db, s.id)); },
@@ -186,7 +190,8 @@ const demo = {
     const db = load(), s = teacher(db, t);
     return later(db.classes.filter(c => s.is_admin || c.teacher_id === s.id).sort((a, b) => a.code.localeCompare(b.code)).map(c => {
       const o = db.students.find(x => x.id === c.teacher_id);
-      return { code: c.code, stage: c.stage || 9, mine: c.teacher_id === s.id, teacher: o ? o.display_name : null,
+      const ul = unlockOf(db, c.code);
+      return { code: c.code, stage: c.stage || 9, unlock_mode: ul.mode, open_units: ul.units, mine: c.teacher_id === s.id, teacher: o ? o.display_name : null,
                students: db.students.filter(x => x.class_code === c.code && x.role === "student").length }; }));
   },
   async teacherClass(t, c) {
@@ -252,6 +257,12 @@ const demo = {
     const db = load(); ofClass(db, t, c);
     if (![8, 9].includes(+stage)) throw new Error("Choose Stage 8 or Stage 9.");
     db.classes.find(x => x.code === c).stage = +stage; store(db); return later(+stage);
+  },
+  async setUnits(t, c, mode, units) {
+    const db = load(); ofClass(db, t, c);
+    if (!["manual", "auto"].includes(mode)) throw new Error("Choose manual or auto unlocking.");
+    const k = db.classes.find(x => x.code === c), v = [...new Set((units || []).map(Number).filter(u => u >= 1 && u <= 9))].sort((a, b) => a - b);
+    k.unlock_mode = mode; k.open_units = v; store(db); return later({ mode, units: v });
   },
   async removeStudent(t, id) { const db = load(); ofStudent(db, t, id);
     db.students = db.students.filter(x => x.id !== id); db.attempts = db.attempts.filter(a => a.student_id !== id); store(db); return null; },

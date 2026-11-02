@@ -1,11 +1,12 @@
 // The "Road to Checkpoint": the badge trail on the Me page, from the baseline to the finish post.
 // Stops, in order: start (baseline), then for each unit its mission and its checkpoint gate,
 // the two half-term Checkpoint checks as flags, and the finish post after the last gate.
-// The trail only shows progress: it never locks a unit, because the class follows the school calendar.
+// The trail only shows progress. A unit the class's teacher hasn't opened yet (js/unlock.js) says so.
 import { mission, MISSION_BADGES, BOSS_PASS } from "./practice.js";
 import { UNITS } from "./curriculum.js";
 import { CHECKS } from "./checks.js";
 import { MINI, MINI_PASS } from "./minitests.js";
+import { unitOpen } from "./unlock.js";
 
 export const TRAIL_UNITS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 // Where the half-term checks stand on the road: after these units' gates.
@@ -28,8 +29,9 @@ export function trailStops(history) {
   let gates = 0;
   TRAIL_UNITS.forEach(u => {
     const m = mission(u, history), steps = m.steps.filter(s => s.key !== "boss"), done = steps.filter(s => s.done).length;
-    stops.push({ kind: "unit", unit: u, title: UNITS[u].title, done: done === steps.length,
-                 progress: steps.length ? done / steps.length : 0, sub: `Unit ${u} mission: ${done} of ${steps.length} steps` });
+    const open = unitOpen(u);
+    stops.push({ kind: "unit", unit: u, title: UNITS[u].title, done: done === steps.length, locked: !open,
+                 progress: steps.length ? done / steps.length : 0, sub: open ? `Unit ${u} mission: ${done} of ${steps.length} steps` : "Locked until your teacher opens it" });
     const g = gateFor(u), best = gateBest(u, history), passed = best != null && best >= g.pass;
     if (passed) gates++;
     stops.push({ kind: "gate", unit: u, title: `Unit ${u} checkpoint`, done: passed, mini: g.mini,

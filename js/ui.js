@@ -143,7 +143,7 @@ export function roadSVG(history, { links = true } = {}) {
     if (s.kind === "unit") { const C = 2 * Math.PI * 21;
       return `<circle cx="${x}" cy="${y}" r="21" fill="${s.done ? "var(--teal)" : "var(--surface)"}" stroke="var(--line)" stroke-width="5"/>
         ${s.progress > 0 && !s.done ? `<circle cx="${x}" cy="${y}" r="21" fill="none" stroke="var(--teal)" stroke-width="5" stroke-linecap="round" stroke-dasharray="${(C * s.progress).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 ${x} ${y})"/>` : ""}
-        <text x="${x}" y="${y + 6}" text-anchor="middle" class="rd-num" fill="${s.done ? "#fff" : "var(--ink)"}">${s.unit}</text>`; }
+        ${s.locked && !s.done ? ic("lock", x, y, 18, "var(--muted)") : `<text x="${x}" y="${y + 6}" text-anchor="middle" class="rd-num" fill="${s.done ? "#fff" : "var(--ink)"}">${s.unit}</text>`}`; }
     if (s.kind === "gate") return `<path d="M${x - 15},${y - 13} h30 v12 c0,9 -8,15 -15,18 c-7,-3 -15,-9 -15,-18z" fill="${s.done ? "var(--gold)" : "var(--card)"}" stroke="${s.done ? "var(--gold)" : "var(--line)"}" stroke-width="2"/>
       ${ic(s.done ? "check" : "lock", x, y + 1, 16, s.done ? "#1A1205" : "var(--muted)")}`;
     if (s.kind === "check") return `<path d="M${x - 8},${y + 14} V${y - 14}" stroke="var(--ink)" stroke-width="2.5" stroke-linecap="round"/>

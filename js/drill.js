@@ -2,6 +2,7 @@
 // They reuse the practice texts' questions, so they need no new content. Saved as mode "vocab" with text_id
 // drill-<skill>, and each answer keeps its reading skill, so drills count in the Reading area and the skill stats.
 import { PRACTICE_TEXTS } from "./content.js";
+import { unitOpen } from "./unlock.js";
 
 export const DRILL_LEN = 4;
 export const DRILL_SKILLS = ["Main idea", "Detail", "Vocabulary in context", "Detail: two points", "Inference",
@@ -12,10 +13,10 @@ export const drillSkill = id => DRILL_SKILLS.find(s => drillId(s) === id) || nul
 export const isDrill = id => drillSkill(id) != null;
 
 // Texts from the unit come first, then texts from other units; `seed` rotates each group so a repeat drill differs.
-// The text just read is left out. Level is the student's reading level (Easier, Core or Harder: never Challenge).
+// The text just read and texts in units the teacher hasn't opened are left out. Level is the student's reading level (Easier, Core or Harder: never Challenge).
 export function drillItems(skill, { unit, level = 1, exclude = null, seed = 0 } = {}) {
   const lv = Math.min(Math.max(level ?? 1, 0), 2);
-  const ts = PRACTICE_TEXTS.filter(t => t.id !== exclude && t.slots.some(s => s.skill === skill));
+  const ts = PRACTICE_TEXTS.filter(t => t.id !== exclude && unitOpen(t.unitNo) && t.slots.some(s => s.skill === skill));
   const rot = a => { const k = a.length ? seed % a.length : 0; return [...a.slice(k), ...a.slice(0, k)]; };
   return [...rot(ts.filter(t => t.unitNo === unit)), ...rot(ts.filter(t => t.unitNo !== unit))].slice(0, DRILL_LEN).map(t => {
     const slot = t.slots.findIndex(s => s.skill === skill), l = Math.min(lv, t.levels.length - 1), q = t.slots[slot].q[l];

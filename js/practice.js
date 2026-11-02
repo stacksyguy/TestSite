@@ -7,6 +7,7 @@ import { wrongNote } from "./feedback.js";
 import { PRACTICE_TEXTS } from "./content.js";
 import { LISTENING } from "./listening.js";
 import { shuffle, steadyBand } from "./engine.js";
+import { focusFrom, unitOpen } from "./unlock.js";
 
 export const XP_SMALL = { first: 5, hint: 2, reveal: 0, finish: 10, tier: 2 };
 
@@ -27,13 +28,16 @@ export function currentEntry(now = new Date()) {
   return cur;
 }
 // The unit to show first: the one running now, or the next one after a writing block or exam week.
-export function focusUnit(now = new Date()) {
+// A unit the class's teacher has not opened yet is never the focus (js/unlock.js).
+export function focusUnit(now = new Date()) { return focusFrom(calendarUnit(now), now); }
+export function calendarUnit(now = new Date()) {
   const cur = currentEntry(now);
   if (cur.kind === "unit") return cur.unit;
   const i = SEQUENCE.indexOf(cur), next = SEQUENCE.slice(i + 1).find(e => e.kind === "unit");
   return next ? next.unit : SEQUENCE.filter(e => e.kind === "unit").pop().unit;
 }
 export function unitStatus(unit, now = new Date()) {
+  if (!unitOpen(unit, now)) return "locked";
   const e = SEQUENCE.find(x => x.kind === "unit" && x.unit === unit), i = SEQUENCE.indexOf(e);
   const next = SEQUENCE[i + 1];
   if (now < new Date(e.start + "T00:00:00+07:00")) return "upcoming";

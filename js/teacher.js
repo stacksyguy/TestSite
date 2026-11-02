@@ -8,6 +8,8 @@ import { dodgeLog } from "./games.js";
 import * as GE from "./gengine.js";
 import * as T from "./tower.js";
 import * as PA from "./papers.js";
+import { SEQUENCE_BY_STAGE, UNITS_BY_STAGE } from "./curriculum.js";
+import { cleanRule, unitOpenBy, unitStartDate, DEFAULT_OPEN } from "./unlock.js";
 
 const $app = document.getElementById("app");
 const $meta = document.getElementById("meta");
@@ -96,7 +98,7 @@ function draw() {
       <div class="stat"><b>${lv.join(" · ")}</b><span>Easier · Core · Harder · Challenge</span></div>
       <div class="stat"><b>${active}</b><span>active in the last 7 days</span></div>
       <div class="stat gold"><b>${rows.reduce((t, r) => t + r.xp_week, 0)}</b><span>class XP this week</span></div></div>
-    <div class="tabs" role="tablist" aria-label="View">${[["overview", "Students"], ...(PA.hasPapers(stageOf(cls)) ? [["paper", "Practice test"]] : []), ["heat", "Skills heat map"], ["board", "Leaderboard"], ["live", "Team escape room"], ["grammar", "Grammar towers"], ["ai", "AI marking"], ["manage", "Manage class"]].map(([k, l]) => `<button role="tab" aria-selected="${k === tab}" data-t="${k}">${l}</button>`).join("")}</div>`;
+    <div class="tabs" role="tablist" aria-label="View">${[["overview", "Students"], ["units", "Units"], ...(PA.hasPapers(stageOf(cls)) ? [["paper", "Practice test"]] : []), ["heat", "Skills heat map"], ["board", "Leaderboard"], ["live", "Team escape room"], ["grammar", "Grammar towers"], ["ai", "AI marking"], ["manage", "Manage class"]].map(([k, l]) => `<button role="tab" aria-selected="${k === tab}" data-t="${k}">${l}</button>`).join("")}</div>`;
   if (tab === "overview") {
     h += `<div class="tbl"><table><thead><tr><th>Student</th><th>English name</th><th>Username</th><th>Level</th><th class="num" title="First baseline and latest baseline or Checkpoint check, as a percentage">Baseline / check</th><th class="num">XP week</th><th class="num">XP total</th><th class="num">Texts</th><th title="Listening Lab: the level the next mission starts on, the best level reached and missions done">Listening Lab</th><th>Last active</th><th>Weakest skill</th></tr></thead><tbody>${
       rows.map(r => { const w = weakest(r.skills || {});
@@ -126,6 +128,8 @@ function draw() {
   } else if (tab === "paper" && PA.hasPapers(stageOf(cls))) {
     h += `<p class="lede">Units 2–3 practice test. Paper A is the diagnostic: every part a student loses marks in sets review tasks (skill drills, missed words, Grammar Lab or grammar sets). Paper B opens when the review is done.</p>
       <div id="ptest"><p class="note">Loading…</p></div>`;
+  } else if (tab === "units") {
+    h += unitsHTML();
   } else if (tab === "manage") {
     h += manageHTML();
   } else if (tab === "live") {
@@ -147,6 +151,7 @@ function draw() {
   document.getElementById("addcls").onclick = () => addClassView(false);
   const tb = document.getElementById("tch"); if (tb) tb.onclick = () => teachersView();
   if (tab === "manage") manageWire();
+  if (tab === "units") unitsWire();
   if (tab === "live") liveView(); else stopLive();
   if (tab === "board") boardView();
   if (tab === "ai") aiView();
@@ -397,6 +402,43 @@ function matchEnglish(text, students) {
     if (st) list.push({ id: st.id, english: /^[-–—]*$/.test(en) ? "" : en }); else missing.push(parts[0].trim());
   });
   return { list, missing };
+}
+// Units tab: manual unlocking (the teacher opens each unit; Units 1-3 to start) or auto (the school calendar).
+const classRule = () => { const c = clsInfo(); return c.unlock_mode ? cleanRule({ mode: c.unlock_mode, units: c.open_units }) : null; };
+const dayMonth = d => d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "Asia/Ho_Chi_Minh" });
+function unitsHTML() {
+  const r = classRule(), stage = stageOf(cls), seq = SEQUENCE_BY_STAGE[stage] || SEQUENCE_BY_STAGE[9], names = UNITS_BY_STAGE[stage] || UNITS_BY_STAGE[9];
+  if (!r) return `<div class="panel"><h3>Unit unlocking</h3><p>Unit unlocking needs a database update. Run <b>supabase/schema.sql</b> again in the Supabase SQL editor, then reload this page.</p>
+    <p class="note">Until then, students in ${U.esc(cls)} can open every unit.</p></div>`;
+  const manual = r.mode === "manual", units = seq.filter(e => e.kind === "unit");
+  const next = manual ? units.find(e => !r.units.includes(e.unit) && e.unit > Math.max(0, ...r.units)) : null;
+  const rowsH = units.map(e => { const open = unitOpenBy(r, e.unit, new Date(), seq), d = unitStartDate(e.unit, seq);
+    const btn = manual ? `<button class="btn small${open ? " alt" : ""}" data-unit="${e.unit}" data-open="${open ? 0 : 1}" style="margin-top:6px">${open ? "Lock" : "Unlock"}</button>`
+      : `<span class="note">${open ? "By the calendar" : `Opens ${dayMonth(d)}`}</span>`;
+    return `<tr><td><b>Unit ${e.unit}</b><br><span class="note">${U.esc(names[e.unit].title)}</span></td><td class="note">${U.esc(e.weeks)}<br>from ${dayMonth(d)}</td>
+      <td>${open ? `<span class="chip none">Open</span>` : `<span class="chip locked">Locked</span>`}<br>${btn}</td></tr>`; }).join("");
+  return `<div class="panel"><h3>How units open for ${U.esc(cls)}</h3>
+      <div class="seg" role="radiogroup" aria-label="Unit unlocking">
+        <button type="button" role="radio" aria-checked="${manual}" data-um="manual">Manual: I unlock each unit</button>
+        <button type="button" role="radio" aria-checked="${!manual}" data-um="auto">Auto: units open on the school calendar</button></div>
+      <p class="note">${manual ? "Students only see the units you unlock. A locked unit hides everything in it: texts, listening, words, grammar, the Labs, games, the escape room and the mini test. Progress is never lost when you lock a unit."
+        : "Each unit opens by itself on its start date below. Switch to manual to open or lock units yourself; your manual list is kept."}</p>
+      ${next ? `<div class="row"><button class="btn" data-unit="${next.unit}" data-open="1">Unlock Unit ${next.unit}: ${U.esc(names[next.unit].title)}</button></div>` : ""}
+      <p class="note" id="unm" aria-live="polite"></p></div>
+    <div class="tbl"><table><thead><tr><th>Unit</th><th>School calendar</th><th>Students see</th></tr></thead><tbody>${rowsH}</tbody></table></div>
+    <p class="note">Students see changes the next time they open or reload the site.</p>`;
+}
+function unitsWire() {
+  const r = classRule(); if (!r) return;
+  const save = async (mode, units, msg) => {
+    const m = document.getElementById("unm"); $app.querySelectorAll("[data-um],[data-unit]").forEach(b => b.disabled = true);
+    try { await api.setUnits(session.token, cls, mode, units); await refreshClasses(); draw(); const m2 = document.getElementById("unm"); if (m2) m2.textContent = msg; }
+    catch (e) { m.innerHTML = `<span class="err">${U.esc(e.message)}</span>`; $app.querySelectorAll("[data-um],[data-unit]").forEach(b => b.disabled = false); } };
+  $app.querySelectorAll("[data-um]").forEach(b => b.onclick = () => { const mode = b.dataset.um; if (mode === r.mode) return;
+    save(mode, r.units.length || mode === "auto" ? r.units : DEFAULT_OPEN, mode === "manual" ? `Saved: you unlock ${cls}'s units yourself.` : `Saved: ${cls}'s units now open on the school calendar.`); });
+  $app.querySelectorAll("[data-unit]").forEach(b => b.onclick = () => { const u = +b.dataset.unit, open = b.dataset.open === "1";
+    if (!open && !confirm(`Lock Unit ${u} for ${cls}? Students keep their progress, but can't open the unit until you unlock it again.`)) return;
+    save("manual", open ? [...r.units, u] : r.units.filter(x => x !== u), `Saved: Unit ${u} is now ${open ? "open" : "locked"} for ${cls}.`); });
 }
 function manageHTML() {
   const others = me.is_admin ? `<form class="panel" id="mv"><h3>Give this class to another teacher</h3>
