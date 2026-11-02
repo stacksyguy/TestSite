@@ -30,6 +30,7 @@ import * as Q from "./quests.js";
 import * as SP from "./speed.js";
 import * as X2 from "./crossword.js";
 import * as AR from "./arcade.js";
+import * as PA from "./papers.js";
 import { STAGE, STAGES, useStage } from "./stage.js";
 
 const $app = document.getElementById("app");
@@ -61,7 +62,7 @@ function header() {
   if (run && run.kind === "practice" && run.phase !== "done") {
     h += `<div class="meter" aria-label="Text level">${E.LEVELS.slice(0, (PRACTICE_TEXTS.find(t => t.id === run.textId) || { levels: [0, 1, 2] }).levels.length).map((l, i) => `<span class="${i === run.r.level ? "on" : ""}">${l}</span>`).join("")}</div>`;
   }
-  if (run && run.phase !== "done" && run.kind !== "game") h += `<span class="pill" id="clock">00:00</span>`;
+  if (run && run.phase !== "done" && run.kind !== "game" && run.kind !== "paper") h += `<span class="pill" id="clock">00:00</span>`;
   h += `<span class="pill xp" title="Your XP">${me.xp_total + (run && run.xpSoFar ? run.xpSoFar : 0)} XP</span>`;
   const on = S.soundOn();
   h += `<button class="pill snd" id="snd" aria-pressed="${on}" aria-label="Sound effects ${on ? "on" : "off"}" title="Sound effects ${on ? "on" : "off"}">${on ? SOUND_ON : SOUND_OFF}</button>`;
@@ -210,6 +211,7 @@ function homeView() {
   if (paused) h += `<div class="tcard"><span class="tag gold">Unfinished</span><h3>${U.esc(runName(paused))}</h3>
       <p class="note">Carry on where you stopped. Starting a different activity will replace this one.</p>
       <div class="row"><button class="btn" id="resume">Continue</button></div></div>`;
+  h += paperCard();
   if (!me.baseline_done && !(paused && paused.kind === "baseline")) {
     h += `<div class="tcard"><span class="tag gold">Start here</span><h3>Baseline reading</h3>
       <p class="note" style="font-size:1rem">Three short texts, from easier to harder, with 12 questions and no hints. Your score sets your starting reading level. It takes about 15 minutes.</p>
@@ -240,15 +242,19 @@ function homeView() {
   const ck = document.getElementById("check"); if (ck) ck.onclick = () => startBaseline(check.id);
   const rs = document.getElementById("reset"); if (rs) rs.onclick = () => { resetDemo(); setSession(null); session = null; me = null; route(); };
   $app.querySelectorAll("[data-wo]").forEach(b => b.onclick = () => startWorkoutItem(workout[+b.dataset.wo]));
+  bindPaperCard();
   bindActivities();
 }
 
 /* ---------------- today's workout and quick tiles ---------------- */
 let workout = [];
-const AREA_ICON = { drill: "read", baseline: "read", review: "review", text: "read", listen: "listen", lab: "lab", vocab: "words", grammar: "grammar" };
+const AREA_ICON = { ptask: "review", drill: "read", baseline: "read", review: "review", text: "read", listen: "listen", lab: "lab", vocab: "words", grammar: "grammar" };
 function workoutCard() {
   const fu = P.focusUnit();
   workout = W.workoutPlan(history, fu, { level: E.steadyLevel(history, me.level ?? 1), baselineDone: me.baseline_done });
+  // The next task of the practice test's review plan goes first.
+  const pt = PA.hasPapers() ? (PA.paperState(history) || { todo: [] }).todo[0] : null;
+  if (pt) workout = [{ kind: "ptask", task: pt, area: "Test review", label: `Test review: ${pt.label}`, done: false }, ...workout];
   const n = workout.filter(i => i.done).length, next = workout.find(i => !i.done);
   return `<div class="tcard workout"><div class="wo-head">${ringSVG(workout)}<div><p class="eyebrow">Today's workout</p>
       <h3>${next ? "Strengthen your weakest areas" : "Workout complete!"}</h3>
@@ -268,6 +274,7 @@ function startWorkoutItem(it) {
   if (!it) return;
   const u = P.focusUnit();
   if (it.kind === "baseline") return startBaseline();
+  if (it.kind === "ptask") return startPaperTask(it.task);
   if (it.kind === "review") return startSmall("vocab", "vocab-review", "Word review", P.vocabSet({ review: true, history, tier: P.tierFor(history) }));
   if (it.kind === "text") return startPractice(it.id);
   if (it.kind === "drill") return startDrill(it.skill);
@@ -2472,9 +2479,9 @@ function qDoneView() {
 // lights up the words that prove the answer; a second wrong answer shows the answer and moves on.
 // The English name if the teacher added one (it can be two words, like "Ryan A"), otherwise the last word of the full name.
 function firstName() { return me.english_name || me.name.split(" ").pop(); }
-function startDrill(skill, { exclude = null } = {}) {
+function startDrill(skill, { exclude = null, unit = P.focusUnit() } = {}) {
   const seed = history.filter(h => h.text_id === D.drillId(skill)).length;
-  const items = D.drillItems(skill, { unit: P.focusUnit(), level: E.steadyLevel(history, me.level ?? 1), exclude, seed });
+  const items = D.drillItems(skill, { unit, level: E.steadyLevel(history, me.level ?? 1), exclude, seed });
   if (!items.length) return;
   run = { kind: "drill", skill, textId: D.drillId(skill), items, i: 0, tries: 0, phase: "teach", results: [], orders: {}, pick: null, draft: "", fb: null, t0: Date.now() };
   saveRun(); route(); top();
@@ -2648,7 +2655,7 @@ function startPractice(id) {
 }
 function runView() {
   header(); nav(null);
-  if (run.phase === "done") return run.kind === "baseline" ? baselineDone() : run.kind === "mini" ? miniDone() : run.kind === "small" ? smallDone() : run.kind === "cards" ? cardsDone()
+  if (run.phase === "done") return run.kind === "baseline" ? baselineDone() : run.kind === "paper" ? paperDone() : run.kind === "mini" ? miniDone() : run.kind === "small" ? smallDone() : run.kind === "cards" ? cardsDone()
     : run.kind === "listen" ? listenDone() : run.kind === "lab" ? labDoneView() : run.kind === "gbuild" ? gbDoneView() : run.kind === "rlab" ? rlDoneView() : run.kind === "glab" ? glDoneView() : run.kind === "drill" ? drillDoneView() : run.kind === "game" ? gameDone() : run.kind === "escape" ? escapeDone() : practiceDone();
   if (run.kind === "game") return gameView();
   if (run.kind === "escape") return escapeView();
@@ -2659,6 +2666,7 @@ function runView() {
   if (run.kind === "drill") { drillView(); return backButton(); }
   if (run.kind === "baseline") baselineView();
   else if (run.kind === "mini") miniView();
+  else if (run.kind === "paper") paperView();
   else if (run.kind === "small") smallView();
   else if (run.kind === "cards") cardsView();
   else if (run.kind === "listen") listenView();
@@ -2678,6 +2686,7 @@ function pausedRun() { const r = loadRun(); return r && r.pausedAt ? r : null; }
 function runName(r) {
   if (r.kind === "baseline") { const T = testOf(r.test); return `${T.id === "baseline" ? "Baseline reading" : T.title} (text ${r.part + 1} of ${T.passages.length})`; }
   if (r.kind === "small") return `${r.label} (question ${r.set.i + 1} of ${r.set.qs.length})`;
+  if (r.kind === "paper") return `${paperOf(r).title} (Part ${r.part + 1} of ${PA.paperSet().PARTS.length})`;
   if (r.kind === "mini") return `${M.MINI[r.unit].title} (question ${r.qi + 1} of ${M.miniQuestions(r.unit).length})`;
   if (r.kind === "listen") return `Listening: ${LISTENING.find(t => t.id === r.id).topic}`;
   if (r.kind === "lab") return `Listening Lab: ${Lab.labMission(r.id).title}${r.phase === "q" ? ` (question ${r.i + 1} of ${Lab.MISSION_LEN})` : ""}`;
@@ -2798,6 +2807,179 @@ function baselineDone() {
   document.getElementById("home").onclick = () => { run = null; saveRun(); location.hash = "#home"; route(); };
   saveAttempt({ mode: "baseline", text_id: T.id, level_start: 0, level_end: R.level, next_level: R.next, score: R.score, max_score: R.max,
                 xp: R.xp, seconds: R.seconds, answers: run.answers });
+}
+
+/* ---- unit test practice papers (Stage 8, Units 2–3) ---- */
+// Like the real unit test: five parts on five pages, 40-minute timer (a guide, it never locks), no hints, marked at the end.
+// The result sets a review plan (js/papers.js); Paper B opens when the plan is done.
+const PAPER_UNIT = 3;                        // drills start with this unit's texts
+function startPaper(key) {
+  run = { kind: "paper", paper: key, part: 0, resp: { r: {}, v: {}, g: {} }, phase: "q", t0: Date.now(), orders: {}, pick: null };
+  saveRun(); route(); top();
+}
+const paperOf = r => PA.paperSet().PAPERS[r.paper];
+function paperClock() {
+  const left = PA.paperSet().PAPER_MINUTES * 60 - Math.floor((Date.now() - run.t0) / 1000), el = document.getElementById("pclock"); if (!el) return;
+  el.textContent = left > 0 ? `⏱ ${U.fmtClock(left)} left` : "⏱ Time's up: finish when you're ready";
+  el.classList.toggle("over", left <= 0);
+}
+const paperFilled = (p, key) => {
+  const r = run.resp;
+  if (key === "reading") return Object.keys(r.r).length;
+  if (key === "vocab") return Object.values(r.v).filter(Boolean).length;
+  return p.grammar.reduce((n, g, gi) => g.part !== key ? n : n + g.gaps.filter((_, k) => (r.g[`${gi}-${k}`] || "").trim()).length, 0);
+};
+const paperTotal = (p, key) => key === "reading" ? p.reading.qs.length : key === "vocab" ? p.vocab.bank.length : p.grammar.filter(g => g.part === key).reduce((n, g) => n + g.gaps.length, 0);
+function paperHead(p) {
+  const PS = PA.paperSet().PARTS;
+  return `<div class="phead"><p class="eyebrow">${U.esc(p.title)}</p><span class="pclock" id="pclock"></span></div>
+    <div class="ptabs" role="tablist">${PS.map((x, i) => { const f = paperFilled(p, x.key), t = paperTotal(p, x.key);
+      return `<button role="tab" aria-selected="${i === run.part}" data-pp="${i}"><b>${i + 1}</b> ${U.esc(x.short)} <small class="${f === t ? "full" : ""}">${f}/${t}</small></button>`; }).join("")}</div>`;
+}
+// Gap sentence with an input per ___.
+function paperGapLine(p, g) {
+  const gi = p.grammar.indexOf(g); let k = 0;
+  return U.esc(g.text).replace(/___/g, () => { const key = `${gi}-${k}`, n = k++;
+    return `<input class="pgap" data-g="${key}" value="${U.esc(run.resp.g[key] || "")}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Question ${g.q}${g.gaps.length > 1 ? `, gap ${n + 1}` : ""}">`; });
+}
+function paperView() {
+  const p = paperOf(run), PS = PA.paperSet().PARTS, part = PS[run.part], last = run.part === PS.length - 1;
+  if (run.phase === "check") return paperCheckView(p);
+  let body = "";
+  if (part.key === "reading") {
+    body = `<div class="qgrid"><div class="textcol"><details open><summary>The text</summary>${U.textHTML(p.reading)}</details></div><div class="qcol">
+      ${p.reading.qs.map((q, i) => { const ord = order("pr" + i, q.opts.length);
+        return `<div class="qcard"><div class="qhead"><span class="qnum">Question ${i + 1}</span></div><p class="stem">${U.esc(q.stem)}</p>
+          <div class="opts" role="radiogroup">${ord.map((oi, n) => `<button class="opt${run.resp.r[i] === oi ? " sel" : ""}" data-pr="${i}" data-o="${oi}" role="radio" aria-checked="${run.resp.r[i] === oi}"><span class="k">${"ABCD"[n]}</span><span>${U.esc(q.opts[oi])}</span></button>`).join("")}</div></div>`; }).join("")}
+      </div></div>`;
+  } else if (part.key === "vocab") {
+    const bank = order("pvb", p.vocab.bank.length).map(i => p.vocab.bank[i][0]), used = new Set(Object.values(run.resp.v).filter(Boolean));
+    const choices = [...bank].sort((a, b) => a.localeCompare(b));
+    const text = U.esc(p.vocab.text).replace(/\[(\d+)\]/g, (_, n) => { const i = +n;
+      return `<span class="pvq"><b>(${11 + i})</b><select class="pvsel" data-v="${i}" aria-label="Gap ${11 + i}"><option value="">……</option>${choices.map(w => `<option${run.resp.v[i] === w ? " selected" : ""}>${U.esc(w)}</option>`).join("")}</select></span>`; });
+    body = `<div class="pbank" id="pbank"><b>Word bank</b>${bank.map(w => `<span class="pword${used.has(w) ? " used" : ""}">${U.esc(w)}</span>`).join("")}</div>
+      <div class="rbox ptext">${text}</div>`;
+  } else {
+    body = `<ol class="pgram">${p.grammar.filter(g => g.part === part.key).map(g => `<li value="${g.q}">${paperGapLine(p, g)}</li>`).join("")}</ol>`;
+  }
+  $app.innerHTML = `<div class="${part.key === "reading" ? "" : "narrow "}pop paper">${paperHead(p)}
+    <h2>Part ${run.part + 1}: ${U.esc(part.name)}</h2><p class="note">${U.esc(part.intro)}${run.part === 0 ? " There are no hints, like the real test." : ""}</p>
+    ${body}
+    <div class="row pnav">${run.part > 0 ? `<button class="btn alt" id="pprev">← Part ${run.part}</button>` : ""}
+      <button class="btn" id="pnext">${last ? "Finish the test" : `Next: Part ${run.part + 2} →`}</button></div></div>`;
+  paperClock(); clearInterval(timerId); timerId = setInterval(paperClock, 1000);
+  const go = i => { run.part = i; saveRun(); runView(); top(); };
+  $app.querySelectorAll("[data-pp]").forEach(b => b.onclick = () => go(+b.dataset.pp));
+  $app.querySelectorAll("[data-pr]").forEach(b => b.onclick = () => {
+    const i = +b.dataset.pr; run.resp.r[i] = +b.dataset.o; S.play("tap"); saveRun();
+    $app.querySelectorAll(`[data-pr="${i}"]`).forEach(x => { const on = +x.dataset.o === run.resp.r[i]; x.classList.toggle("sel", on); x.setAttribute("aria-checked", on); });
+    paperTabs(p);
+  });
+  $app.querySelectorAll("[data-v]").forEach(s => s.onchange = () => {
+    run.resp.v[+s.dataset.v] = s.value; saveRun();
+    const used = new Set(Object.values(run.resp.v).filter(Boolean));
+    $app.querySelectorAll(".pword").forEach(w => w.classList.toggle("used", used.has(w.textContent)));
+    paperTabs(p);
+  });
+  $app.querySelectorAll("[data-g]").forEach(inp => inp.oninput = () => { run.resp.g[inp.dataset.g] = inp.value; saveRun(); paperTabs(p); });
+  const pv = document.getElementById("pprev"); if (pv) pv.onclick = () => go(run.part - 1);
+  document.getElementById("pnext").onclick = () => { if (last) { run.phase = "check"; saveRun(); runView(); top(); } else go(run.part + 1); };
+}
+// Refresh the answered counts on the part tabs without redrawing the page (keeps the keyboard open).
+function paperTabs(p) {
+  PA.paperSet().PARTS.forEach((x, i) => { const s = $app.querySelector(`[data-pp="${i}"] small`); if (!s) return;
+    const f = paperFilled(p, x.key), t = paperTotal(p, x.key); s.textContent = `${f}/${t}`; s.classList.toggle("full", f === t); });
+}
+function paperCheckView(p) {
+  const PS = PA.paperSet().PARTS, gaps = PS.map((x, i) => ({ i, x, f: paperFilled(p, x.key), t: paperTotal(p, x.key) })), empty = gaps.reduce((n, g) => n + g.t - g.f, 0);
+  $app.innerHTML = `<div class="narrow pop paper">${paperHead(p)}<h2>Ready to hand in?</h2>
+    ${empty ? `<div class="fb info"><p>You have <b>${empty}</b> empty answer${empty > 1 ? "s" : ""}. An empty answer gets no mark. Tap a part to go back.</p></div>` : `<div class="fb ok"><p>Every question has an answer. Check your spelling, then hand in.</p></div>`}
+    <div class="parts">${gaps.map(g => `<button class="part linkpart" data-pp="${g.i}"><b>${g.f}/${g.t}</b><span>Part ${g.i + 1}: ${U.esc(g.x.short)}</span></button>`).join("")}</div>
+    <div class="row"><button class="btn alt" id="pback">← Back to Part ${PS.length}</button><button class="btn" id="psubmit">Hand in my test</button></div></div>`;
+  paperClock(); clearInterval(timerId); timerId = setInterval(paperClock, 1000);
+  $app.querySelectorAll("[data-pp]").forEach(b => b.onclick = () => { run.phase = "q"; run.part = +b.dataset.pp; saveRun(); runView(); top(); });
+  document.getElementById("pback").onclick = () => { run.phase = "q"; run.part = PS.length - 1; saveRun(); runView(); top(); };
+  document.getElementById("psubmit").onclick = finishPaper;
+}
+function finishPaper() {
+  clearInterval(timerId);
+  const p = paperOf(run), answers = PA.markPaper(p, run.resp), score = answers.filter(a => a.first_try).length, max = answers.length;
+  run.answers = answers;
+  run.result = { score, max, xp: PA.paperXP(score, history, p), seconds: Math.round((Date.now() - run.t0) / 1000), plan: PA.reviewPlan(PA.paperSet(), answers) };
+  run.phase = "done"; saveRun(); runView(); top();
+  score === max ? Cel.big({ icon: "🏆", title: `Full marks, ${firstName()}!`, sub: `${score}/${max} on ${p.name}`, xp: run.result.xp }) : Cel.set(run.result.xp);
+}
+// One row per mark: what the student wrote and the answer.
+function paperReviewRows(p) {
+  const PS = PA.paperSet().PARTS, marks = PA.marksOf(p);
+  return PS.map(x => {
+    const rows = marks.map((m, i) => ({ m, a: run.answers[i] })).filter(({ m }) => m.part === x.key).map(({ m, a }) => {
+      let yours, right;
+      if (m.part === "reading") { const q = p.reading.qs[m.q - 1], pk = run.resp.r[m.q - 1]; yours = pk == null ? "" : q.opts[pk]; right = q.opts[0]; }
+      else if (m.part === "vocab") { yours = run.resp.v[m.q - 11] || ""; right = m.word; }
+      else { yours = a.typed; right = m.accept[0]; }
+      const what = m.part === "reading" ? m.skill : m.part === "vocab" ? "Word" : (P.grammarPoint(m.point) || {}).title || "Grammar";
+      return `<tr><td>${m.q}${m.of > 1 ? "abc"[m.gap] : ""}</td><td>${U.esc(what)}</td><td class="${a.first_try ? "" : "pwrong"}">${yours ? U.esc(yours) : `<span class="note">no answer</span>`}</td>
+        <td>${a.first_try ? `<span class="chip none">✓ Right</span>` : `<b>${U.esc(right)}</b>`}</td></tr>`; }).join("");
+    return `<details class="prev"${run.answers.some((a, i) => marks[i].part === x.key && !a.first_try) ? " open" : ""}><summary>Part ${PS.indexOf(x) + 1}: ${U.esc(x.name)}</summary>
+      <div class="tbl"><table><thead><tr><th>#</th><th>Skill</th><th>Your answer</th><th>Answer</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
+  }).join("");
+}
+function paperPlanHTML(plan, { done = false, isB = false } = {}) {
+  if (!plan.length) return `<div class="sumcard good"><p class="sumhead">✓ Nothing to review</p><p>Every part was right. ${isB ? "Great work." : "Paper B is open if you'd like more practice."}</p></div>`;
+  return `<div class="sumcard next${done ? "" : " flash"}"><p class="sumhead">🎯 ${isB ? "Still to practise" : "Your review plan"}</p>
+    <p>${isB ? "These are the parts to keep practising before the real test." : "Do these activities to fix what went wrong. When they are all done, Paper B opens for your retake."}</p>
+    <ol class="pplan">${plan.map((t, i) => `<li class="${t.done ? "done" : ""}"><span>${U.esc(t.label)}</span>${t.done ? `<span class="wo-tick" aria-label="done">${TICK}</span>` : `<button class="btn small" data-ptask="${i}">Start</button>`}</li>`).join("")}</ol></div>`;
+}
+function paperDone() {
+  const R = run.result, p = paperOf(run), isB = p.key === "b", parts = PA.partScores(PA.paperSet(), run.answers);
+  $app.innerHTML = `<div class="narrow pop paper"><p class="eyebrow">${U.esc(p.title)} · finished</p>
+    <h1>You scored ${R.score} out of ${R.max}</h1>
+    <div class="stats"><div class="stat"><b>${R.score}/${R.max}</b><span>score</span></div><div class="stat gold"><b>+${R.xp}</b><span>XP</span></div>
+      <div class="stat"><b>${U.fmtTime(R.seconds)}</b><span>time</span></div></div>
+    <div class="parts">${parts.map(x => `<div class="part"><b>${x.right}/${x.total}</b><span>${U.esc(x.short)}</span><div class="bar"><i class="${x.right / x.total < 0.5 ? "low" : ""}" style="width:${100 * x.right / x.total}%"></i></div></div>`).join("")}</div>
+    ${paperPlanHTML(R.plan, { isB })}
+    <h3>Check your answers</h3>${paperReviewRows(p)}
+    <p class="note" id="savemsg" aria-live="polite">Saving…</p>
+    <div class="row">${R.plan.length ? `<button class="btn" data-ptask="0">Start: ${U.esc(R.plan[0].label)}</button>` : ""}<button class="btn alt" id="home">Back to home</button></div></div>`;
+  const leave = () => { run = null; saveRun(); location.hash = "#home"; route(); top(); };
+  document.getElementById("home").onclick = leave;
+  $app.querySelectorAll("[data-ptask]").forEach(b => b.onclick = () => { const t = R.plan[+b.dataset.ptask]; run = null; saveRun(); startPaperTask(t); });
+  saveAttempt({ mode: "vocab", text_id: p.id, level_start: null, level_end: null, score: R.score, max_score: R.max, xp: R.xp, seconds: R.seconds, answers: run.answers });
+}
+function startPaperTask(t) {
+  if (!t) return;
+  if (t.kind === "drill") return startDrill(t.skill, { unit: PAPER_UNIT });
+  if (t.kind === "words") return startSmall("vocab", t.id, "Words you missed in the test", P.vocabSet({ list: t.words, history, tier: 0 }));
+  if (t.kind === "glab") return startGLab(t.id);
+  if (t.kind === "grammar") return startPoint(t.point);
+}
+// Home: the practice test card. Paper A, then the review plan, then Paper B.
+function paperCard() {
+  const st = PA.hasPapers() ? PA.paperState(history) : null; if (!st) return "";
+  const { set, lastA, bestB, plan, bOpen } = st, A = set.PAPERS.a, B = set.PAPERS.b;
+  const sc = h => h ? `${h.score}/${h.max_score}` : "–";
+  let body;
+  if (!lastA) body = `<p class="note" style="font-size:1rem">Just like your unit test: reading, vocabulary and grammar, 30 marks in 40 minutes. Your results give you a review plan, then Paper B opens for a retake.</p>
+    <div class="row"><button class="btn" data-paper="a">Start Paper A</button></div>`;
+  else if (!bOpen) body = `<p class="note" style="font-size:1rem">Paper A: <b>${sc(lastA)}</b>. Finish your review plan to open Paper B 🔒 (${plan.filter(t => t.done).length} of ${plan.length} done).</p>
+    ${paperPlanHTML(plan, { done: false })}`;
+  else if (!st.b.length) body = `<p class="note" style="font-size:1rem">Paper A: <b>${sc(lastA)}</b>. ${plan.length ? "Review done. " : ""}Paper B is open: same parts, new questions. Show how much you've improved!</p>
+    <div class="row"><button class="btn" data-paper="b">Start Paper B</button></div>`;
+  else body = `<p class="note" style="font-size:1rem">Paper A <b>${sc(st.firstA)}</b> → Paper B <b>${sc(bestB)}</b>${bestB.score > st.firstA.score ? ` · up ${bestB.score - st.firstA.score} marks 🎉` : ""}</p>
+    ${paperPlanHTML(PA.reviewPlan(set, st.lastB.answers || []).map(t => ({ ...t, done: PA.taskDone(history, t, st.lastB.created_at) })), { done: true, isB: true })}
+    <div class="row"><button class="btn alt small" data-paper="a">Retake Paper A</button><button class="btn alt small" data-paper="b">Retake Paper B</button></div>`;
+  return `<div class="tcard ptcard"><span class="tag gold">Unit test practice</span><h3>Units 2–3 practice test</h3>${body}</div>`;
+}
+function paperCardTasks() {
+  const st = PA.hasPapers() ? PA.paperState(history) : null; if (!st) return [];
+  if (st.b.length && st.lastB) return PA.reviewPlan(st.set, st.lastB.answers || []).map(t => ({ ...t, done: PA.taskDone(history, t, st.lastB.created_at) }));
+  return st.plan;
+}
+function bindPaperCard() {
+  $app.querySelectorAll("[data-paper]").forEach(b => b.onclick = () => startPaper(b.dataset.paper));
+  const tasks = paperCardTasks();
+  $app.querySelectorAll(".ptcard [data-ptask]").forEach(b => b.onclick = () => startPaperTask(tasks[+b.dataset.ptask]));
 }
 
 /* ---- unit checkpoint mini tests ---- */

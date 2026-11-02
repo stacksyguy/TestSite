@@ -159,9 +159,12 @@ function matchQuestion(words, rnd) {
 // A set of up to n words. Words missed last time come first, then "not sure" cards, then new words.
 // The question type follows how well the word is known: a new or missed word is matched or chosen from meanings,
 // a word right once fills a gap from a word bank, and a word right twice in a row is typed.
-export function vocabSet({ unit = null, review = false, history = [], n = 10, rnd = Math.random, now = new Date(), tier = 0 } = {}) {
+// `list` ([{ w, unit }]) practises exactly those words, in that order (the words missed in a practice test).
+export function vocabSet({ unit = null, review = false, list = null, history = [], n = 10, rnd = Math.random, now = new Date(), tier = 0 } = {}) {
   const st = wordState(history), sc = wordSchedule(history), cs = cardState(history);
-  const words = review ? wordsToReview(history, now) : unit ? unitWords(unit) : allWords();
+  if (list) { review = true; unit = null; n = Math.max(n, list.length); }
+  const words = list ? list.map(x => allWords().find(y => y.w === x.w && y.unit === x.unit)).filter(Boolean)
+    : review ? wordsToReview(history, now) : unit ? unitWords(unit) : allWords();
   let order = review ? words.slice() : shuffle(words.length, rnd).map(i => words[i]);
   if (!review) {
     const rank = x => { const k = wordKey(x); return st[k] === false ? 0 : st[k] === undefined && cs[k] === false ? 1 : st[k] === undefined ? 2 : 3; };

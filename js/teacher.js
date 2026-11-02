@@ -7,6 +7,7 @@ import { TRAPS, LAB_LEVELS } from "./lab.js";
 import { dodgeLog } from "./games.js";
 import * as GE from "./gengine.js";
 import * as T from "./tower.js";
+import * as PA from "./papers.js";
 
 const $app = document.getElementById("app");
 const $meta = document.getElementById("meta");
@@ -95,7 +96,7 @@ function draw() {
       <div class="stat"><b>${lv.join(" · ")}</b><span>Easier · Core · Harder · Challenge</span></div>
       <div class="stat"><b>${active}</b><span>active in the last 7 days</span></div>
       <div class="stat gold"><b>${rows.reduce((t, r) => t + r.xp_week, 0)}</b><span>class XP this week</span></div></div>
-    <div class="tabs" role="tablist" aria-label="View">${[["overview", "Students"], ["heat", "Skills heat map"], ["board", "Leaderboard"], ["live", "Team escape room"], ["grammar", "Grammar towers"], ["ai", "AI marking"], ["manage", "Manage class"]].map(([k, l]) => `<button role="tab" aria-selected="${k === tab}" data-t="${k}">${l}</button>`).join("")}</div>`;
+    <div class="tabs" role="tablist" aria-label="View">${[["overview", "Students"], ...(PA.hasPapers(stageOf(cls)) ? [["paper", "Practice test"]] : []), ["heat", "Skills heat map"], ["board", "Leaderboard"], ["live", "Team escape room"], ["grammar", "Grammar towers"], ["ai", "AI marking"], ["manage", "Manage class"]].map(([k, l]) => `<button role="tab" aria-selected="${k === tab}" data-t="${k}">${l}</button>`).join("")}</div>`;
   if (tab === "overview") {
     h += `<div class="tbl"><table><thead><tr><th>Student</th><th>English name</th><th>Username</th><th>Level</th><th class="num" title="First baseline and latest baseline or Checkpoint check, as a percentage">Baseline / check</th><th class="num">XP week</th><th class="num">XP total</th><th class="num">Texts</th><th title="Listening Lab: the level the next mission starts on, the best level reached and missions done">Listening Lab</th><th>Last active</th><th>Weakest skill</th></tr></thead><tbody>${
       rows.map(r => { const w = weakest(r.skills || {});
@@ -122,6 +123,9 @@ function draw() {
         rows.map(r => `<tr><td>${U.esc(r.name)}</td>${TK.map(k => { const t = (r.traps || {})[k]; if (!t || !t.total) return `<td class="h hn"></td>`;
           const p = Math.round(100 * t.caught / t.total); return `<td class="h h${p >= 60 ? 0 : p >= 40 ? 1 : p >= 20 ? 2 : 3}" title="caught ${t.caught} of ${t.total}">${p}%</td>`; }).join("")}</tr>`).join("")
       }</tbody></table></div>`;
+  } else if (tab === "paper" && PA.hasPapers(stageOf(cls))) {
+    h += `<p class="lede">Units 2–3 practice test. Paper A is the diagnostic: every part a student loses marks in sets review tasks (skill drills, missed words, Grammar Lab or grammar sets). Paper B opens when the review is done.</p>
+      <div id="ptest"><p class="note">Loading…</p></div>`;
   } else if (tab === "manage") {
     h += manageHTML();
   } else if (tab === "live") {
@@ -147,6 +151,37 @@ function draw() {
   if (tab === "board") boardView();
   if (tab === "ai") aiView();
   if (tab === "grammar") grammarView();
+  if (tab === "paper") paperView();
+}
+
+// Practice test: Paper A by part, review tasks done, Paper B, and the class average per part (what to reteach).
+async function paperView() {
+  const el = document.getElementById("ptest"), stage = stageOf(cls), set = PA.paperSet(stage), here = cls;
+  let list;
+  try { list = await Promise.all(rows.map(r => api.teacherStudent(session.token, r.id).then(d => ({ r, st: PA.paperState(d.history || [], stage) })))); }
+  catch (e) { el.innerHTML = `<p class="err">${U.esc(e.message)}</p>`; return; }
+  if (cls !== here || tab !== "paper") return;
+  const parts = h => h ? PA.partScores(set, h.answers || []) : null;
+  const sc = h => h ? `${h.score}/${h.max_score}` : "–";
+  const took = list.filter(x => x.st.firstA), tookB = list.filter(x => x.st.bestB);
+  const avg = (xs, f) => xs.length ? Math.round(10 * xs.reduce((t, x) => t + f(x), 0) / xs.length) / 10 : "–";
+  const classParts = set.PARTS.map((p, i) => ({ p, a: avg(took, x => parts(x.st.firstA)[i].right), b: avg(tookB, x => parts(x.st.bestB)[i].right),
+    total: PA.marksOf(set.PAPERS.a).filter(m => m.part === p.key).length }));
+  const weakest = took.length ? [...classParts].sort((x, y) => x.a / x.total - y.a / y.total)[0] : null;
+  el.innerHTML = `<div class="stats"><div class="stat"><b>${took.length}/${list.length}</b><span>took Paper A</span></div>
+      <div class="stat"><b>${avg(took, x => x.st.firstA.score)}</b><span>Paper A average /30</span></div>
+      <div class="stat"><b>${list.filter(x => x.st.lastA && x.st.plan.length && x.st.plan.every(t => t.done)).length}</b><span>finished their review</span></div>
+      <div class="stat"><b>${tookB.length ? avg(tookB, x => x.st.bestB.score) : "–"}</b><span>Paper B average /30</span></div></div>
+    ${weakest ? `<div class="panel"><h3>Class average by part</h3><p class="note" style="margin-top:0">Paper A${tookB.length ? " → Paper B" : ""}. Lowest: <b>${U.esc(weakest.p.name)}</b>.</p>
+      <div class="parts">${classParts.map(x => `<div class="part"><b>${x.a}/${x.total}${tookB.length ? ` → ${x.b}` : ""}</b><span>${U.esc(x.p.short)}</span><div class="bar"><i class="${x.a / x.total < 0.5 ? "low" : ""}" style="width:${100 * x.a / x.total}%"></i></div></div>`).join("")}</div></div>` : ""}
+    <div class="tbl"><table><thead><tr><th>Student</th><th class="num">Paper A</th>${set.PARTS.map(p => `<th class="num" title="${U.esc(p.name)}">${U.esc(p.short)}</th>`).join("")}<th>Review tasks</th><th class="num">Paper B</th><th class="num">Change</th></tr></thead><tbody>${
+      list.map(({ r, st }) => { const pa = parts(st.firstA), left = st.plan.filter(t => !t.done);
+        return `<tr><td>${U.esc(r.english_name || r.name)}</td><td class="num">${sc(st.firstA)}${st.a.length > 1 ? ` <span class="note">(${st.a.length} tries)</span>` : ""}</td>
+          ${set.PARTS.map((p, i) => `<td class="num">${pa ? `${pa[i].right}/${pa[i].total}` : "–"}</td>`).join("")}
+          <td>${!st.lastA ? "–" : !st.plan.length ? `<span class="chip none">none needed</span>` : `<b>${st.plan.length - left.length}/${st.plan.length}</b>${left.length ? ` <span class="note" title="${U.esc(left.map(t => t.label).join("\n"))}">to do: ${U.esc(left.map(t => t.label.replace(/ \(.*\)$/, "")).join(", "))}</span>` : ""}`}</td>
+          <td class="num">${st.bestB ? sc(st.bestB) : st.bOpen && st.lastA ? `<span class="note">open</span>` : st.lastA ? "🔒" : "–"}</td>
+          <td class="num">${st.bestB && st.firstA ? `${st.bestB.score - st.firstA.score >= 0 ? "+" : ""}${st.bestB.score - st.firstA.score}` : "–"}</td></tr>`; }).join("")
+    }</tbody></table></div>`;
 }
 
 // Grammar towers: one row per student, one small square per brick (in tower order, foundations first), and the bricks the
